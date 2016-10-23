@@ -23,10 +23,16 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.iterable.S3Objects;
+import com.amazonaws.services.s3.model.ListObjectsRequest;
+import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 import java.io.InputStream;
 import java.net.URL;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 /**
  * @author Dmitry Kotlyarov
@@ -40,7 +46,7 @@ public class CustomStorage extends Storage {
     }
 
     public CustomStorage(String bucket, String prefix, AmazonS3 s3) {
-        super(bucket, prefix);
+        super("s3", bucket, prefix);
 
         this.s3 = s3;
     }
@@ -50,18 +56,97 @@ public class CustomStorage extends Storage {
     }
 
     @Override
-    public Storage getSubstorage(String prefix) {
+    public String getHttpsUrl() {
         return null;
     }
 
     @Override
-    public Iterable<String> find(String prefix, String filter) {
-        return null;
+    public Storage getSubstorage(String prefix) {
+        return new CustomStorage(bucket, this.prefix + prefix, s3);
+    }
+
+    @Override
+    public Iterable<String> find(final String prefix, String filter) {
+        final String pfx = this.prefix + prefix;
+        return new Iterable<String>() {
+            private final S3Objects s3Objects = S3Objects.withPrefix(s3, bucket, pfx).withBatchSize(65536);
+
+            @Override
+            public Iterator<String> iterator() {
+                return new Iterator<String>() {
+                    private final int length = pfx.length();
+                    private final Iterator<S3ObjectSummary> iterator = s3Objects.iterator();
+
+                    @Override
+                    public boolean hasNext() {
+                        return iterator.hasNext();
+                    }
+
+                    @Override
+                    public String next() {
+                        return iterator.next().getKey().substring(length);
+                    }
+
+                    @Override
+                    public void remove() {
+                        throw new UnsupportedOperationException("remove()");
+                    }
+                };
+            }
+        };
     }
 
     @Override
     public Iterable<String> list(String prefix, String filter) {
-        return null;
+        final String pfx = this.prefix + prefix;
+        return new Iterable<String>() {
+            private final ListObjectsRequest request = new ListObjectsRequest(bucket, pfx, null, "/", 65536);
+
+            @Override
+            public Iterator<String> iterator() {
+                return new Iterator<String>() {
+                    private ObjectListing listing = s3.listObjects(request);
+                    private Iterator<String> iterator = listing.getCommonPrefixes().iterator();
+                    private String directory = findNext();
+
+                    private String findNext() {
+                        if (iterator.hasNext()) {
+                            return iterator.next();
+                        } else {
+                            while (listing.isTruncated()) {
+                                listing = s3.listNextBatchOfObjects(listing);
+                                iterator = listing.getCommonPrefixes().iterator();
+                                if (iterator.hasNext()) {
+                                    return iterator.next();
+                                }
+                            }
+                            return null;
+                        }
+                    }
+
+                    @Override
+                    public boolean hasNext() {
+                        return directory != null;
+                    }
+
+                    @Override
+                    public String next() {
+                        String v = directory;
+                        if (v != null) {
+                            directory = findNext();
+                            return v;
+                        } else {
+                            throw new NoSuchElementException("Next directory is not found");
+                        }
+                    }
+
+                    @Override
+                    public void remove() {
+                        throw new UnsupportedOperationException("remove()");
+                    }
+                };
+            }
+        };
     }
 
     @Override
