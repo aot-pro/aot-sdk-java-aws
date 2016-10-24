@@ -17,6 +17,7 @@
 
 package aot.storage.s3;
 
+import aot.storage.ListStorageException;
 import aot.storage.Storage;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.regions.Region;
@@ -66,7 +67,7 @@ public class CustomStorage extends Storage {
     }
 
     @Override
-    public Iterable<String> find(final String prefix, String filter) {
+    public Iterable<String> find(String prefix, String filter) {
         final String pfx = this.prefix + prefix;
         return new Iterable<String>() {
             private final S3Objects s3Objects = S3Objects.withPrefix(s3, bucket, pfx).withBatchSize(65536);
@@ -104,47 +105,55 @@ public class CustomStorage extends Storage {
 
             @Override
             public Iterator<String> iterator() {
-                return new Iterator<String>() {
-                    private ObjectListing listing = s3.listObjects(request);
-                    private Iterator<String> iterator = listing.getCommonPrefixes().iterator();
-                    private String directory = findNext();
+                try {
+                    return new Iterator<String>() {
+                        private ObjectListing listing = s3.listObjects(request);
+                        private Iterator<String> iterator = listing.getCommonPrefixes().iterator();
+                        private String directory = findNext();
 
-                    private String findNext() {
-                        if (iterator.hasNext()) {
-                            return iterator.next();
-                        } else {
-                            while (listing.isTruncated()) {
-                                listing = s3.listNextBatchOfObjects(listing);
-                                iterator = listing.getCommonPrefixes().iterator();
-                                if (iterator.hasNext()) {
-                                    return iterator.next();
+                        private String findNext() {
+                            if (iterator.hasNext()) {
+                                return iterator.next();
+                            } else {
+                                while (listing.isTruncated()) {
+                                    listing = s3.listNextBatchOfObjects(listing);
+                                    iterator = listing.getCommonPrefixes().iterator();
+                                    if (iterator.hasNext()) {
+                                        return iterator.next();
+                                    }
                                 }
+                                return null;
                             }
-                            return null;
                         }
-                    }
 
-                    @Override
-                    public boolean hasNext() {
-                        return directory != null;
-                    }
-
-                    @Override
-                    public String next() {
-                        String v = directory;
-                        if (v != null) {
-                            directory = findNext();
-                            return v;
-                        } else {
-                            throw new NoSuchElementException("Next directory is not found");
+                        @Override
+                        public boolean hasNext() {
+                            return directory != null;
                         }
-                    }
 
-                    @Override
-                    public void remove() {
-                        throw new UnsupportedOperationException("remove()");
-                    }
-                };
+                        @Override
+                        public String next() {
+                            String v = directory;
+                            if (v != null) {
+                                try {
+                                    directory = findNext();
+                                    return v;
+                                } catch (Exception e) {
+                                    throw new ListStorageException(CustomStorage.this, e);
+                                }
+                            } else {
+                                throw new NoSuchElementException("Next directory is not found");
+                            }
+                        }
+
+                        @Override
+                        public void remove() {
+                            throw new UnsupportedOperationException("remove()");
+                        }
+                    };
+                } catch (Exception e) {
+                    throw new ListStorageException(CustomStorage.this, e);
+                }
             }
         };
     }
