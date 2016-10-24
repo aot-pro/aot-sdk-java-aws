@@ -34,6 +34,7 @@ import java.net.URL;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.regex.Pattern;
 
 /**
  * @author Dmitry Kotlyarov
@@ -68,38 +69,13 @@ public class CustomStorage extends Storage {
 
     @Override
     public Iterable<String> find(String prefix, String filter) {
-        final String pfx = this.prefix + prefix;
-        return new Iterable<String>() {
-            private final S3Objects s3Objects = S3Objects.withPrefix(s3, bucket, pfx).withBatchSize(65536);
-
-            @Override
-            public Iterator<String> iterator() {
-                return new Iterator<String>() {
-                    private final int length = pfx.length();
-                    private final Iterator<S3ObjectSummary> iterator = s3Objects.iterator();
-
-                    @Override
-                    public boolean hasNext() {
-                        return iterator.hasNext();
-                    }
-
-                    @Override
-                    public String next() {
-                        return iterator.next().getKey().substring(length);
-                    }
-
-                    @Override
-                    public void remove() {
-                        throw new UnsupportedOperationException("remove()");
-                    }
-                };
-            }
-        };
+        return null;
     }
 
     @Override
     public Iterable<String> list(String prefix, String filter) {
         final String pfx = this.prefix + prefix;
+        final Pattern fltr = (filter == null) ? null : Pattern.compile(filter);
         return new Iterable<String>() {
             private final ListObjectsRequest request = new ListObjectsRequest(bucket, pfx, null, "/", 65536);
 
@@ -107,23 +83,37 @@ public class CustomStorage extends Storage {
             public Iterator<String> iterator() {
                 try {
                     return new Iterator<String>() {
+                        private final Pattern filter = fltr;
                         private ObjectListing listing = s3.listObjects(request);
                         private Iterator<String> iterator = listing.getCommonPrefixes().iterator();
                         private String directory = findNext();
 
                         private String findNext() {
-                            if (iterator.hasNext()) {
-                                return iterator.next();
-                            } else {
-                                while (listing.isTruncated()) {
-                                    listing = s3.listNextBatchOfObjects(listing);
-                                    iterator = listing.getCommonPrefixes().iterator();
-                                    if (iterator.hasNext()) {
-                                        return iterator.next();
+                            while (iterator.hasNext()) {
+                                if (filter == null) {
+                                    return iterator.next();
+                                } else {
+                                    String el = iterator.next();
+                                    if (filter.matcher(el).matches()) {
+                                        return el;
                                     }
                                 }
-                                return null;
                             }
+                            while (listing.isTruncated()) {
+                                listing = s3.listNextBatchOfObjects(listing);
+                                iterator = listing.getCommonPrefixes().iterator();
+                                while (iterator.hasNext()) {
+                                    if (filter == null) {
+                                        return iterator.next();
+                                    } else {
+                                        String el = iterator.next();
+                                        if (filter.matcher(el).matches()) {
+                                            return el;
+                                        }
+                                    }
+                                }
+                            }
+                            return null;
                         }
 
                         @Override
