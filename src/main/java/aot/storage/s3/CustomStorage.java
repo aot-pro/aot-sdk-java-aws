@@ -17,6 +17,7 @@
 
 package aot.storage.s3;
 
+import aot.storage.FindStorageException;
 import aot.storage.ListStorageException;
 import aot.storage.Storage;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -24,7 +25,6 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.iterable.S3Objects;
 import com.amazonaws.services.s3.model.ListObjectsRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
@@ -69,7 +69,78 @@ public class CustomStorage extends Storage {
 
     @Override
     public Iterable<String> find(String prefix, String filter) {
-        return null;
+        final String pfx = this.prefix + prefix;
+        final Pattern fltr = (filter == null) ? null : Pattern.compile(filter);
+        return new Iterable<String>() {
+            private final ListObjectsRequest request = new ListObjectsRequest(bucket, pfx, null, null, 65536);
+
+            @Override
+            public Iterator<String> iterator() {
+                try {
+                    return new Iterator<String>() {
+                        private final Pattern filter = fltr;
+                        private ObjectListing listing = s3.listObjects(request);
+                        private Iterator<S3ObjectSummary> iterator = listing.getObjectSummaries().iterator();
+                        private String key = findNext();
+
+                        private String findNext() {
+                            while (iterator.hasNext()) {
+                                if (filter == null) {
+                                    return iterator.next().getKey();
+                                } else {
+                                    String el = iterator.next().getKey();
+                                    if (filter.matcher(el).matches()) {
+                                        return el;
+                                    }
+                                }
+                            }
+                            while (listing.isTruncated()) {
+                                listing = s3.listNextBatchOfObjects(listing);
+                                iterator = listing.getObjectSummaries().iterator();
+                                while (iterator.hasNext()) {
+                                    if (filter == null) {
+                                        return iterator.next().getKey();
+                                    } else {
+                                        String el = iterator.next().getKey();
+                                        if (filter.matcher(el).matches()) {
+                                            return el;
+                                        }
+                                    }
+                                }
+                            }
+                            return null;
+                        }
+
+                        @Override
+                        public boolean hasNext() {
+                            return key != null;
+                        }
+
+                        @Override
+                        public String next() {
+                            String v = key;
+                            if (v != null) {
+                                try {
+                                    key = findNext();
+                                    return v;
+                                } catch (Exception e) {
+                                    throw new FindStorageException(CustomStorage.this, e);
+                                }
+                            } else {
+                                throw new NoSuchElementException("Next key is not found");
+                            }
+                        }
+
+                        @Override
+                        public void remove() {
+                            throw new UnsupportedOperationException("remove()");
+                        }
+                    };
+                } catch (Exception e) {
+                    throw new FindStorageException(CustomStorage.this, e);
+                }
+            }
+        };
     }
 
     @Override
